@@ -1,0 +1,534 @@
+// ==UserScript==
+// @name         ChordWiki mod ver0.8
+// @namespace    http://tampermonkey.net/
+// @version      27.0
+// @description  Xボタン削除 + ヘッダー挙動修正 + UI85% + 曲情報統合
+// @match        https://ja.chordwiki.org/*
+// @grant        GM_addStyle
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // ==========================================================================
+    // 1. 設定データの管理
+    // ==========================================================================
+
+    const STORAGE_PREFIX = "cw_v27_"; // バージョン v27.0
+
+    // 初期ウインドウ位置
+    const INITIAL_POS = { top: "117px", right: "20px", left: "auto" };
+
+    const defaultConfig = {
+        // ---------------------------------------------------------
+        // ▼ 歌詞とコードの見た目
+        // ---------------------------------------------------------
+        fontSize: "16",
+        chordFontSize: "18",
+        chordOffsetY: "0",
+        lineHeight: "1.8",
+        letterSpacing: "0",
+        columnCount: "1",
+        columnGap: "40",
+        chordFont: "sans-serif",
+
+        // ---------------------------------------------------------
+        // ▼ 色の設定
+        // ---------------------------------------------------------
+        darkMode: "false",
+        lightChordColor: "#2196F3",
+        darkChordColor: "#64B5F6",
+
+        // ---------------------------------------------------------
+        // ▼ ウインドウの位置とサイズ
+        // ---------------------------------------------------------
+        windowPos: JSON.stringify(INITIAL_POS),
+        windowSize: JSON.stringify({ width: "320px", height: "auto" }),
+        windowVisible: "false"
+    };
+
+    const config = {};
+    for (let key in defaultConfig) {
+        config[key] = localStorage.getItem(STORAGE_PREFIX + key) || defaultConfig[key];
+    }
+
+    const root = document.documentElement;
+    const updateCSSVars = () => {
+        root.style.setProperty('--cw-font-size', config.fontSize + 'px');
+        root.style.setProperty('--cw-chord-font-size', config.chordFontSize + 'px');
+        root.style.setProperty('--cw-chord-offset-y', config.chordOffsetY + 'px');
+        root.style.setProperty('--cw-line-height', config.lineHeight);
+        root.style.setProperty('--cw-letter-spacing', config.letterSpacing + 'px');
+        root.style.setProperty('--cw-column-count', config.columnCount);
+        root.style.setProperty('--cw-column-gap', config.columnGap + 'px');
+
+        let fontVal = "inherit";
+        switch(config.chordFont) {
+            case "sans-serif": fontVal = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif"; break;
+            case "serif":      fontVal = "'Times New Roman', 'Yu Mincho', serif"; break;
+            case "monospace":  fontVal = "'Courier New', Consolas, monospace"; break;
+            case "cursive":    fontVal = "'Comic Sans MS', 'Marker Felt', cursive"; break;
+        }
+        root.style.setProperty('--cw-chord-font', fontVal);
+
+        const isDark = config.darkMode === "true";
+        root.style.setProperty('--cw-chord-color', isDark ? config.darkChordColor : config.lightChordColor);
+    };
+
+    updateCSSVars();
+
+    // ==========================================================================
+    // 2. コード表記変換
+    // ==========================================================================
+    function replaceChordNotation() {
+        const chordElements = document.querySelectorAll('div[oncopy] b, div[oncopy] .chord');
+
+        chordElements.forEach(el => {
+            let chordText = el.textContent.trim();
+
+            // M -> △
+            chordText = chordText.replace(/M/g, '△');
+
+            // オンコードのスペース
+            chordText = chordText.replace(/\//g, ' / ');
+
+            // フラット(b)の上付き装飾
+            chordText = chordText.replace(/([A-G])(b)/g, '$1<span class="cw-flat-b">$2</span>');
+
+            // テンションノート( )の上付き装飾
+            chordText = chordText.replace(/(\(.*?\))/g, '<span class="cw-tension">$1</span>');
+
+            el.innerHTML = chordText;
+        });
+    }
+    replaceChordNotation();
+
+    // ==========================================================================
+    // 3. スタイル定義
+    // ==========================================================================
+    GM_addStyle(`
+        :root {
+            --cw-primary-color: #2196F3;
+            --cw-bg-color: #f8f9fa;
+            --cw-window-bg: rgba(255, 255, 255, 0.95);
+            --cw-text-color: #333;
+            --cw-sub-text-color: #666;
+            --cw-border-color: #e0e0e0;
+            --cw-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+            --cw-radius: 16px;
+            --cw-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            --cw-scale: 0.85;
+        }
+        body.cw-dark-mode {
+            --cw-primary-color: #64B5F6;
+            --cw-bg-color: #121212;
+            --cw-window-bg: rgba(40, 40, 40, 0.95);
+            --cw-text-color: #e0e0e0;
+            --cw-sub-text-color: #aaaaaa;
+            --cw-border-color: #444;
+            --cw-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+            background-color: var(--cw-bg-color) !important;
+            color: var(--cw-text-color) !important;
+        }
+
+        body {
+            font-family: var(--cw-font-family) !important;
+            -webkit-font-smoothing: antialiased;
+            margin-top: 70px !important;
+        }
+
+        /* 不要要素非表示 */
+        #header, .header, #top_box, .topic_path, #menu_box, #side, .footer { display: none !important; }
+
+        /* 歌詞エリア */
+        div[oncopy] {
+            font-size: var(--cw-font-size) !important;
+            line-height: var(--cw-line-height) !important;
+            letter-spacing: var(--cw-letter-spacing) !important;
+            column-count: var(--cw-column-count) !important;
+            column-gap: var(--cw-column-gap) !important;
+            color: var(--cw-text-color) !important;
+        }
+
+        div[oncopy] b, div[oncopy] .chord {
+            font-family: var(--cw-chord-font) !important;
+            font-size: var(--cw-chord-font-size) !important;
+            color: var(--cw-chord-color) !important;
+            transition: color 0.3s, transform 0.3s;
+            display: inline-block;
+            transform: translateY(var(--cw-chord-offset-y));
+            font-weight: 600;
+        }
+
+        .cw-flat-b { font-size: 0.8em; vertical-align: super; display: inline-block; margin-left: 0.1em; transform: scaleY(1.3); }
+        .cw-tension { font-size: 0.7em; vertical-align: super; display: inline-block; margin-left: 0.1em; opacity: 0.9; }
+
+        /* UIラッパー */
+        #cw_ui_wrapper > * {
+            transform: scale(var(--cw-scale));
+            transform-origin: top right;
+            position: fixed;
+        }
+
+        /* ウインドウ */
+        #cw_settingsWindow {
+            z-index: 9998;
+            min-width: 300px; max-width: 90vw; min-height: 100px;
+            background: var(--cw-window-bg);
+            backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+            border-radius: var(--cw-radius);
+            box-shadow: var(--cw-shadow);
+            border: 1px solid var(--cw-border-color);
+            color: var(--cw-text-color);
+            font-size: 14px;
+            display: none; overflow: hidden;
+            transition: opacity 0.2s;
+        }
+
+        #cw_windowHeader {
+            padding: 12px 16px;
+            background: rgba(var(--cw-primary-color), 0.08);
+            cursor: move; /* 移動カーソル */
+            display: flex; justify-content: space-between; align-items: center;
+            font-weight: 700; user-select: none;
+            border-bottom: 1px solid var(--cw-border-color);
+            font-size: 15px; letter-spacing: 0.5px;
+        }
+        /* Xボタンは削除したためCSSも削除 */
+
+        #cw_windowContent { padding: 20px; max-height: calc(100% - 50px); overflow-y: auto; }
+
+        /* 曲情報カード */
+        .cw-info-card {
+            background: rgba(128, 128, 128, 0.1);
+            border-radius: 12px; padding: 15px; text-align: center; margin-bottom: 20px; border: 1px solid var(--cw-border-color);
+        }
+        .cw-info-title { font-size: 18px; font-weight: 700; margin-bottom: 4px; line-height: 1.3; color: var(--cw-text-color); }
+        .cw-info-sub { font-size: 12px; color: var(--cw-sub-text-color); margin-bottom: 12px; line-height: 1.4; }
+        .cw-info-buttons { display: flex; gap: 10px; justify-content: center; }
+        .cw-media-btn {
+            padding: 6px 16px; border-radius: 20px; text-decoration: none;
+            font-size: 12px; font-weight: bold; color: white !important;
+            transition: transform 0.2s, opacity 0.2s; box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        .cw-media-btn:hover { transform: scale(1.05); opacity: 0.9; }
+
+        /* UIパーツ群 */
+        .cw-section { margin-bottom: 24px; }
+        .cw-section-title { font-size: 12px; color: var(--cw-sub-text-color); margin-bottom: 12px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }
+        .cw-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 14px; }
+        .cw-val { font-weight: 600; color: var(--cw-primary-color); margin-left: 8px; font-size: 14px; }
+
+        input[type="range"] { -webkit-appearance: none; width: 100%; height: 6px; background: var(--cw-border-color); border-radius: 3px; outline: none; margin-bottom: 8px; }
+        input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; background: var(--cw-primary-color); border-radius: 50%; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+        select, input[type="color"] { padding: 8px 12px; border-radius: 8px; border: 1px solid var(--cw-border-color); background: var(--cw-bg-color); color: var(--cw-text-color); font-size: 14px; outline: none; cursor: pointer; }
+
+        .cw-toggle-switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+        .cw-toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 24px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .4s; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+        input:checked + .slider { background-color: var(--cw-primary-color); }
+        input:checked + .slider:before { transform: translateX(20px); }
+
+        #cw_resetBtn { color: var(--cw-sub-text-color); text-decoration: none; font-size: 13px; cursor: pointer; }
+        #cw_resetBtn:hover { color: var(--cw-primary-color); text-decoration: underline; }
+
+        #cw_keyControl form { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+        #cw_keyControl select { flex: 1; min-width: 80px; }
+        #cw_keyControl input[type="submit"] { padding: 8px 16px; border-radius: 8px; border: none; background: var(--cw-primary-color); color: white; font-weight: 600; cursor: pointer; transition: filter 0.2s; }
+        #cw_keyControl input[type="submit"]:hover { filter: brightness(1.1); }
+
+        /* 右上検索バー */
+        #cw_globalSearch {
+            top: 17px; right: 17px; z-index: 9999;
+            display: flex; align-items: center;
+            background: var(--cw-window-bg); padding: 6px; border-radius: 30px;
+            box-shadow: var(--cw-shadow); border: 1px solid var(--cw-border-color); backdrop-filter: blur(16px);
+        }
+        #cw_searchInput { border: none; background: transparent; outline: none; font-size: 14px; padding: 8px 12px; width: 160px; color: var(--cw-text-color); transition: width 0.3s; }
+        #cw_searchInput:focus { width: 220px; }
+        #cw_searchBtn { border: none; background: var(--cw-primary-color); cursor: pointer; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 18px; }
+
+        /* 右下 ⚙ボタン (常時表示) */
+        #cw_toggleBtn {
+            bottom: 35px; right: 35px; z-index: 9999;
+            width: 60px; height: 60px; border-radius: 50%;
+            background: var(--cw-primary-color); color: #fff; font-size: 28px;
+            border: none; cursor: pointer; box-shadow: var(--cw-shadow); transition: transform 0.3s;
+            display: flex !important; align-items: center; justify-content: center;
+        }
+        #cw_toggleBtn:hover { transform: scale(1.1) rotate(20deg); }
+
+        #cw_resizeHandle { position: absolute; bottom: 0; right: 0; width: 24px; height: 24px; cursor: nwse-resize; z-index: 1; }
+
+        /* YouTube埋め込み */
+        .cw-youtube-container { position: relative; width: 100%; padding-bottom: 56.25%; height: 0; margin-top: 30px; border-radius: var(--cw-radius); overflow: hidden; box-shadow: var(--cw-shadow); }
+        .cw-youtube-container iframe { position: absolute; top: 0; left: 0; width: 100%; height: 100%; border: none; }
+    `);
+
+    // --- UIラッパー ---
+    const uiWrapper = document.createElement("div");
+    uiWrapper.id = "cw_ui_wrapper";
+    document.body.appendChild(uiWrapper);
+
+    if (config.darkMode === "true") document.body.classList.add("cw-dark-mode");
+
+
+    // ==========================================================================
+    // 4. 画面要素の作成
+    // ==========================================================================
+
+    // 検索バー
+    const searchBar = document.createElement("div");
+    searchBar.id = "cw_globalSearch";
+    searchBar.innerHTML = `<input type="text" id="cw_searchInput" placeholder="曲名・アーティスト検索"><button id="cw_searchBtn">🔍</button>`;
+    uiWrapper.appendChild(searchBar);
+
+    const doSearch = () => {
+        const query = document.getElementById("cw_searchInput").value;
+        if(query) location.href = `https://ja.chordwiki.org/wiki.cgi?c=search&t=${encodeURIComponent(query)}`;
+    };
+    document.getElementById("cw_searchBtn").addEventListener("click", doSearch);
+    document.getElementById("cw_searchInput").addEventListener("keypress", (e) => { if(e.key === 'Enter') doSearch(); });
+
+    // 曲情報取得
+    const titleElem = document.querySelector(".title");
+    const subtitleElem = document.querySelector(".subtitle");
+    let songTitle = "", songSub = "";
+    if (titleElem) { songTitle = titleElem.innerText.trim(); titleElem.style.display = 'none'; }
+    if (subtitleElem) { songSub = subtitleElem.innerText.trim(); subtitleElem.style.display = 'none'; }
+
+    const encodedTitle = encodeURIComponent(songTitle);
+    let infoCardHtml = "";
+    if (songTitle) {
+        infoCardHtml = `
+            <div class="cw-info-card">
+                <div class="cw-info-title">${songTitle}</div>
+                <div class="cw-info-sub">${songSub}</div>
+                <div class="cw-info-buttons">
+                    <a href="https://open.spotify.com/search/$${encodedTitle}" target="_blank" class="cw-media-btn" style="background:#1DB954;">Spotify</a>
+                    <a href="https://www.youtube.com/results?search_query=${encodedTitle}" target="_blank" class="cw-media-btn" style="background:#FF0000;">YouTube</a>
+                </div>
+            </div>`;
+    }
+
+    // 設定ウインドウ
+    const windowEl = document.createElement("div");
+    windowEl.id = "cw_settingsWindow";
+
+    try {
+        const pos = JSON.parse(config.windowPos);
+        const top = parseFloat(pos.top) / 0.85;
+        const left = pos.left === "auto" ? "auto" : parseFloat(pos.left) / 0.85 + "px";
+        const right = pos.right === "auto" ? "auto" : parseFloat(pos.right) / 0.85 + "px";
+        Object.assign(windowEl.style, { top: top + "px", left: left, right: right });
+        Object.assign(windowEl.style, JSON.parse(config.windowSize));
+    } catch(e) {
+        Object.assign(windowEl.style, INITIAL_POS);
+    }
+
+    const originalKeyDiv = document.getElementById("key");
+    const keyControlContainer = document.createElement("div");
+    keyControlContainer.id = "cw_keyControl";
+    if (originalKeyDiv) {
+        const form = originalKeyDiv.querySelector("form");
+        if (form) keyControlContainer.appendChild(form);
+        else keyControlContainer.innerHTML = originalKeyDiv.innerHTML;
+        originalKeyDiv.style.display = "none";
+    } else {
+        keyControlContainer.innerHTML = "<small style='color:var(--cw-sub-text-color);'>Key機能なし</small>";
+    }
+
+    windowEl.innerHTML = `
+        <div id="cw_windowHeader">
+            <span>⚙ Settings</span>
+            </div>
+        <div id="cw_windowContent">
+            ${infoCardHtml}
+            <div class="cw-section"><div class="cw-section-title">KEY CONTROL</div><div id="cw_key_placeholder"></div></div>
+            <div class="cw-section">
+                <div class="cw-section-title">CHORD STYLE</div>
+                <div class="cw-row"><span>コードサイズ</span><span id="disp_chordFontSize" class="cw-val">${config.chordFontSize}</span></div>
+                <input type="range" id="cw_chordFontSize" min="10" max="48" value="${config.chordFontSize}">
+                <div class="cw-row"><span>コード位置Y</span><span id="disp_chordOffsetY" class="cw-val">${config.chordOffsetY}</span></div>
+                <input type="range" id="cw_chordOffsetY" min="-30" max="30" step="1" value="${config.chordOffsetY}">
+                <div class="cw-row">
+                    <span>Font</span>
+                    <select id="cw_chordFont" style="width:60%">
+                        <option value="sans-serif">ゴシック (標準)</option>
+                        <option value="serif">明朝体</option>
+                        <option value="monospace">等幅フォント</option>
+                        <option value="cursive">手書き風</option>
+                    </select>
+                </div>
+                <div class="cw-row" style="margin-top:16px;">
+                    <span>🌙 Dark Mode</span>
+                    <label class="cw-toggle-switch">
+                        <input type="checkbox" id="cw_darkModeToggle" ${config.darkMode === "true" ? "checked" : ""}>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div id="cw_color_light_area" class="cw-row" style="display:${config.darkMode === "true" ? "none" : "flex"}">
+                    <span>Color</span><input type="color" id="cw_lightChordColor" value="${config.lightChordColor}">
+                </div>
+                <div id="cw_color_dark_area" class="cw-row" style="display:${config.darkMode === "true" ? "flex" : "none"}">
+                    <span>Color</span><input type="color" id="cw_darkChordColor" value="${config.darkChordColor}">
+                </div>
+            </div>
+            <div class="cw-section">
+                <div class="cw-section-title">LYRICS LAYOUT</div>
+                <div class="cw-row"><span>歌詞サイズ</span><span id="disp_fontSize" class="cw-val">${config.fontSize}</span></div>
+                <input type="range" id="cw_fontSize" min="12" max="48" value="${config.fontSize}">
+                <div class="cw-row"><span>行間</span><span id="disp_lineHeight" class="cw-val">${config.lineHeight}</span></div>
+                <input type="range" id="cw_lineHeight" min="1" max="3.5" step="0.1" value="${config.lineHeight}">
+                <div class="cw-row"><span>文字間</span><span id="disp_letterSpacing" class="cw-val">${config.letterSpacing}</span></div>
+                <input type="range" id="cw_letterSpacing" min="-2" max="10" step="0.5" value="${config.letterSpacing}">
+                <div class="cw-row"><span>列数</span><span id="disp_columnCount" class="cw-val">${config.columnCount}</span></div>
+                <input type="range" id="cw_columnCount" min="1" max="4" step="1" value="${config.columnCount}">
+                <div class="cw-row"><span>列の隙間</span><span id="disp_columnGap" class="cw-val">${config.columnGap}</span></div>
+                <input type="range" id="cw_columnGap" min="-20" max="200" step="5" value="${config.columnGap}">
+            </div>
+             <div style="text-align:right; margin-top:20px;">
+                <span id="cw_resetBtn">Reset All Settings</span>
+            </div>
+        </div>
+        <div id="cw_resizeHandle"></div>
+    `;
+
+    uiWrapper.appendChild(windowEl);
+    windowEl.querySelector("#cw_key_placeholder").appendChild(keyControlContainer);
+
+    const toggleBtn = document.createElement("button");
+    toggleBtn.id = "cw_toggleBtn";
+    toggleBtn.textContent = "⚙";
+    uiWrapper.appendChild(toggleBtn);
+
+
+    // ==========================================================================
+    // 5. イベント処理
+    // ==========================================================================
+
+    function saveConfig(key, value) {
+        config[key] = value;
+        localStorage.setItem(STORAGE_PREFIX + key, value);
+    }
+
+    // ウインドウを初期位置に戻すヘルパー
+    const resetWindowPosition = () => {
+        Object.assign(windowEl.style, INITIAL_POS);
+        saveConfig("windowPos", JSON.stringify(INITIAL_POS));
+    };
+
+    const sliderIds = ['fontSize', 'chordFontSize', 'chordOffsetY', 'lineHeight', 'letterSpacing', 'columnCount', 'columnGap'];
+    sliderIds.forEach(key => {
+        const el = windowEl.querySelector(`#cw_${key}`);
+        if (el) {
+            el.addEventListener("input", e => {
+                saveConfig(key, e.target.value);
+                windowEl.querySelector(`#disp_${key}`).textContent = e.target.value;
+                updateCSSVars();
+            });
+        }
+    });
+
+    windowEl.querySelector("#cw_chordFont").addEventListener("change", e => { saveConfig("chordFont", e.target.value); updateCSSVars(); });
+
+    const lightArea = windowEl.querySelector("#cw_color_light_area");
+    const darkArea  = windowEl.querySelector("#cw_color_dark_area");
+    windowEl.querySelector("#cw_darkModeToggle").addEventListener("change", e => {
+        const isDark = e.target.checked;
+        saveConfig("darkMode", isDark.toString());
+        document.body.classList.toggle("cw-dark-mode", isDark);
+        updateCSSVars();
+        lightArea.style.display = isDark ? "none" : "flex";
+        darkArea.style.display  = isDark ? "flex" : "none";
+    });
+    windowEl.querySelector("#cw_lightChordColor").addEventListener("input", e => { saveConfig("lightChordColor", e.target.value); updateCSSVars(); });
+    windowEl.querySelector("#cw_darkChordColor").addEventListener("input", e => { saveConfig("darkChordColor", e.target.value); updateCSSVars(); });
+
+    // ウインドウ開閉/リセット
+    if (config.windowVisible === "true") { windowEl.style.display = "block"; }
+    else { windowEl.style.display = "none"; }
+
+    toggleBtn.addEventListener("click", () => {
+        if (windowEl.style.display === "none" || windowEl.style.display === "") {
+            // 閉じていた場合 -> 位置リセットして開く
+            resetWindowPosition();
+            windowEl.style.display = "block";
+            saveConfig("windowVisible", "true");
+        } else {
+            // 開いていた場合 -> 閉じる
+            windowEl.style.display = "none";
+            saveConfig("windowVisible", "false");
+        }
+    });
+
+    // ウインドウリサイズ
+    const handle = windowEl.querySelector("#cw_resizeHandle");
+    let isResizing = false;
+    handle.addEventListener('mousedown', e => { isResizing = true; e.preventDefault(); });
+    document.addEventListener('mousemove', e => {
+        if (!isResizing) return;
+        const rect = windowEl.getBoundingClientRect();
+        const newWidth = windowEl.style.left !== "auto" ? e.clientX - rect.left : rect.right - e.clientX;
+        const newHeight = e.clientY - rect.top;
+        if (newWidth >= 280 * 0.85) windowEl.style.width = (newWidth / 0.85) + 'px';
+        if (newHeight >= 150 * 0.85) windowEl.style.height = (newHeight / 0.85) + 'px';
+    });
+    document.addEventListener('mouseup', () => {
+        if (isResizing) {
+            isResizing = false;
+            saveConfig("windowSize", JSON.stringify({ width: windowEl.style.width, height: windowEl.style.height }));
+        }
+    });
+
+    // ウインドウドラッグ (ヘッダー全体)
+    const header = windowEl.querySelector("#cw_windowHeader");
+    let isDragging = false, offsetX, offsetY;
+    header.addEventListener("mousedown", e => {
+        // リサイズハンドルをクリックした場合はドラッグしない
+        if (e.target.closest('#cw_resizeHandle')) return;
+
+        isDragging = true;
+        const rect = windowEl.getBoundingClientRect();
+        offsetX = e.clientX - rect.left;
+        offsetY = e.clientY - rect.top;
+        e.preventDefault();
+    });
+    document.addEventListener("mousemove", e => {
+        if (!isDragging) return;
+        windowEl.style.top = ((e.clientY - offsetY) / 0.85) + "px";
+        windowEl.style.left = ((e.clientX - offsetX) / 0.85) + "px";
+        windowEl.style.right = "auto";
+    });
+    document.addEventListener("mouseup", () => {
+        if (isDragging) {
+            isDragging = false;
+            saveConfig("windowPos", JSON.stringify({ top: windowEl.style.top, left: windowEl.style.left, right: "auto" }));
+        }
+    });
+
+    // リセットボタン
+    windowEl.querySelector("#cw_resetBtn").addEventListener("click", () => {
+        if (confirm("設定を初期状態に戻しますか？")) {
+            Object.keys(defaultConfig).forEach(k => localStorage.removeItem(STORAGE_PREFIX + k));
+            location.reload();
+        }
+    });
+
+    // YouTubeのインライン再生
+    const movieDiv = document.querySelector("div.movie");
+    if (movieDiv) {
+        const ytLink = movieDiv.querySelector("a");
+        if (ytLink && ytLink.href.includes("youtube.com") && ytLink.href.includes("v=")) {
+            const m = ytLink.href.match(/[?&]v=([^&]+)/);
+            if (m && m[1]) {
+                const c = document.createElement("div");
+                c.className = "cw-youtube-container";
+                c.innerHTML = `<iframe src="https://www.youtube.com/embed/${m[1]}" allowfullscreen></iframe>`;
+                movieDiv.innerHTML = ""; movieDiv.appendChild(c);
+                const h = movieDiv.previousElementSibling; if(h && h.tagName === 'H2') h.textContent = "📺 参考動画";
+            }
+        }
+    }
+})();
